@@ -1,0 +1,84 @@
+---
+title: "C_Purchase Orders"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r current CLV & Acquiring new customer}
+#Pull in the customer data we purchased from Trip Advisor and married with our CRM system data
+Trip_Data<-read.csv(file="Session 6 Data.csv", header = TRUE,sep=",")
+summary(Trip_Data)
+
+#Probit model
+Probit_BW<-glm(Chose.BW~Score+Reviews+Price+Position,family=binomial(link='probit'),data=Trip_Data)
+summary(Probit_BW)
+
+#Need to correct for selection bias. Create the IMR for selection bias problems
+#install.packages("sampleSelection")
+library(sampleSelection)
+Trip_Data$IMR<-invMillsRatio(Probit_BW)$IMR1
+#Estimate the Charges model with the addition of the selection bias correction
+Charges_Bias_lm<-lm(Charge.Per.Night~Credit+Business+IMR,data=subset(Trip_Data,Chose.BW==1))
+summary(Charges_Bias_lm)
+
+#Now calculate CLV of our Customers
+alpha<-.7 #retention
+OTA_Fee<-.3
+Price_BW<-386  #Price on TripAdvisor
+Margin<-.5
+Discount<-.1
+Margin_Multiplier<-alpha/(1+Discount-alpha)
+
+#Assume customers always book through Trip Advisor, so Acquisition Cost is sub-t not one-time
+#Create our CLV for existing customers
+Trip_Data$CLV<-(Price_BW*(1-OTA_Fee)+Trip_Data$Charge.Per.Night)*2*Margin*Margin_Multiplier
+summary(Trip_Data$CLV)
+#Total CLV of current customers
+tapply(Trip_Data$CLV,Trip_Data$Chose.BW,FUN=sum)[2]
+
+#If we don't change any condition, the probability of acquiring the customers:
+Trip_Data$Probability<-ifelse(Trip_Data$Chose.BW==1, NA, predict(Probit_BW, newdata=Trip_Data,type="response"))
+#Charger per night for for non-customers
+Trip_Data$Charge.Per.Night.Estimated<-ifelse(Trip_Data$Chose.BW==1, NA, predict(Charges_Bias_lm, newdata=Trip_Data))
+#E[CE] for non-customers
+Trip_Data$CLV.Estimated<-ifelse(Trip_Data$Chose.BW==1, NA, Trip_Data$Probability*(Price_BW*(1-OTA_Fee)+Trip_Data$Charge.Per.Night.Estimated)*2*Margin*Margin_Multiplier)
+Expected_CE_non_customer<-tapply(Trip_Data$CLV.Estimated,Trip_Data$Chose.BW,FUN=sum)[1]
+Expected_CE_non_customer
+```
+
+```{r Position==1}
+
+#Create a new dataset with Position==1
+Trip_Data_New<-Trip_Data[,c(1,2,3,4,5,6,7,8,9)]
+Trip_Data_New$Position<-1
+
+#New Probability for non-customers
+summary(Probit_BW)
+Trip_Data_New$Probability<-ifelse(Trip_Data_New$Chose.BW==1, NA, predict(Probit_BW, newdata=Trip_Data_New,type="response"))
+
+#New IMR for all customers
+Trip_Data_New$IMR<-dnorm(-predict(Probit_BW, newdata=Trip_Data_New))/(1-pnorm(-predict(Probit_BW, newdata=Trip_Data_New)))
+
+#New Charge.Per.Night for non-customers
+Trip_Data_New$Charge.Per.Night.Estimated<-ifelse(Trip_Data_New$Chose.BW==1, NA, predict(Charges_Bias_lm, newdata=Trip_Data_New))
+
+#New CLV for non-customers
+Trip_Data_New$CLV.Estimated<-ifelse(Trip_Data$Chose.BW==1, NA, Trip_Data_New$Probability*(Price_BW*(1-OTA_Fee)+Trip_Data_New$Charge.Per.Night.Estimated)*2*Margin*Margin_Multiplier)
+Expected_CE_non_customer_new<-tapply(Trip_Data_New$CLV.Estimated,Trip_Data_New$Chose.BW,FUN=sum)[1]
+Expected_CE_non_customer_new
+```
+
+
+```{r Difference}
+# If we assume current P(Acquiring new customer) is not equal to 0,
+# Then even though we are not spending $5M, we may get $8,704,936 from non-customers.
+# After spending $5M, we will get $32,574,157 from non-customers.
+# Subtracting $5M, we will get $18,869,221
+Expected_CE_non_customer_new-Expected_CE_non_customer-5000000
+
+# Therefore, Best Western should spend $5M on placing the Crest View in the first position.
+```
